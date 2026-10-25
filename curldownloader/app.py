@@ -58,6 +58,26 @@ class CurlDownloaderApp(tk.Tk):
             side=tk.LEFT, padx=(12, 0), pady=(6, 0)
         )
 
+        output_frame = ttk.LabelFrame(root, text="下载设置", padding=10)
+        output_frame.pack(fill=tk.X, pady=(0, 10))
+
+        ttk.Label(output_frame, text="保存目录").grid(row=0, column=0, sticky=tk.W)
+        ttk.Entry(output_frame, textvariable=self.output_dir, width=70).grid(
+            row=0, column=1, sticky=tk.EW, padx=(8, 8)
+        )
+        ttk.Button(output_frame, text="浏览", style="Ghost.TButton", command=self.on_browse).grid(row=0, column=2)
+
+        ttk.Label(output_frame, text="文件名").grid(row=1, column=0, sticky=tk.W, pady=(8, 0))
+        ttk.Entry(output_frame, textvariable=self.output_name, width=30).grid(
+            row=1, column=1, sticky=tk.W, padx=(8, 8), pady=(8, 0)
+        )
+        ttk.Checkbutton(
+            output_frame,
+            text="断点续传（同目录 + 同文件名，失败后可继续）",
+            variable=self.resume_enabled,
+        ).grid(row=2, column=1, sticky=tk.W, padx=(8, 8), pady=(8, 0))
+        output_frame.columnconfigure(1, weight=1)
+
         input_frame = ttk.LabelFrame(root, text="下载输入", padding=10)
         input_frame.pack(fill=tk.BOTH, expand=False, pady=(0, 10))
         self.curl_input = scrolledtext.ScrolledText(
@@ -72,6 +92,7 @@ class CurlDownloaderApp(tk.Tk):
             pady=8,
         )
         self.curl_input.pack(fill=tk.BOTH, expand=True)
+        self.curl_input.bind("<<Paste>>", self._on_paste)
 
         action_row = ttk.Frame(root)
         action_row.pack(fill=tk.X, pady=(0, 10))
@@ -105,26 +126,6 @@ class CurlDownloaderApp(tk.Tk):
         self.field_cookie = self._add_field(parsed_frame, "Cookie", 3)
         self.field_ua = self._add_field(parsed_frame, "User-Agent", 4)
         self.field_jd = self._add_field(parsed_frame, "JD 链接", 5)
-
-        output_frame = ttk.LabelFrame(root, text="下载设置", padding=10)
-        output_frame.pack(fill=tk.X, pady=(0, 10))
-
-        ttk.Label(output_frame, text="保存目录").grid(row=0, column=0, sticky=tk.W)
-        ttk.Entry(output_frame, textvariable=self.output_dir, width=70).grid(
-            row=0, column=1, sticky=tk.EW, padx=(8, 8)
-        )
-        ttk.Button(output_frame, text="浏览", style="Ghost.TButton", command=self.on_browse).grid(row=0, column=2)
-
-        ttk.Label(output_frame, text="文件名").grid(row=1, column=0, sticky=tk.W, pady=(8, 0))
-        ttk.Entry(output_frame, textvariable=self.output_name, width=30).grid(
-            row=1, column=1, sticky=tk.W, padx=(8, 8), pady=(8, 0)
-        )
-        ttk.Checkbutton(
-            output_frame,
-            text="断点续传（同目录 + 同文件名，失败后可继续）",
-            variable=self.resume_enabled,
-        ).grid(row=2, column=1, sticky=tk.W, padx=(8, 8), pady=(8, 0))
-        output_frame.columnconfigure(1, weight=1)
 
         ttk.Button(root, text="开始下载", style="Accent.TButton", command=self.on_download).pack(
             anchor=tk.W, pady=(0, 8)
@@ -214,6 +215,93 @@ class CurlDownloaderApp(tk.Tk):
         if selected:
             self.output_dir.set(selected)
 
+    def _on_paste(self, _event: tk.Event[tk.Misc] | None = None) -> None:
+        """粘贴后稍等片刻再判断，避免拿到半截内容。"""
+        self.after(150, self._auto_download_after_paste)
+
+    def _auto_download_after_paste(self) -> None:
+        """粘贴内容看起来可下载时，直接按当前保存目录开始下载。"""
+        if self._worker and self._worker.is_alive():
+            return
+        raw = self.curl_input.get("1.0", tk.END).strip()
+        if not raw or not self._looks_downloadable(raw):
+            return
+        if self.on_parse():
+            self.on_download()
+
+    @staticmethod
+    def _looks_downloadable(raw: str) -> bool:
+        """粗略判断输入是否可下载，避免误触发。"""
+        text = raw.strip().lower()
+        if text.startswith(("http://", "https://", "magnet:?", "curl ", "curl.exe")):
+            return True
+        return text.endswith(".torrent") or text.endswith(".har")
+
+    @staticmethod
+    def _collect_urls(parsed_items: list) -> list[str]:
+        """展开每个任务的 URL 与音视频附加轨，供确认弹框展示。"""
+        urls: list[str] = []
+        for item in parsed_items:
+            urls.append(item.url)
+            urls.extend(item.extra_urls)
+        return urls
+
+    def _confirm_urls(self, urls: list[str]) -> bool:
+        """弹窗列出全部待下载链接，点「确定」返回 True。"""
+        dialog = tk.Toplevel(self)
+        dialog.title("确认下载链接")
+        dialog.transient(self)
+        dialog.minsize(520, 300)
+
+        ttk.Label(
+            dialog,
+            text=f"共解析到 {len(urls)} 条链接，点「确定」开始下载：",
+            style="Subtitle.TLabel",
+        ).pack(anchor=tk.W, padx=14, pady=(14, 8))
+
+        text_frame = ttk.Frame(dialog)
+        text_frame.pack(fill=tk.BOTH, expand=True, padx=14)
+        text = tk.Text(
+            text_frame,
+            wrap=tk.WORD,
+            height=12,
+            relief=tk.FLAT,
+            bg="#ffffff",
+            fg="#111827",
+            padx=8,
+            pady=8,
+        )
+        scrollbar = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=text.yview)
+        text.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        for index, url in enumerate(urls, start=1):
+            text.insert(tk.END, f"{index}. {url}\n")
+        text.configure(state=tk.DISABLED)
+
+        result = {"ok": False}
+
+        def confirm() -> None:
+            result["ok"] = True
+            dialog.destroy()
+
+        button_row = ttk.Frame(dialog)
+        button_row.pack(fill=tk.X, padx=14, pady=14)
+        ttk.Button(button_row, text="确定", style="Accent.TButton", command=confirm).pack(side=tk.RIGHT)
+        ttk.Button(button_row, text="取消", style="Ghost.TButton", command=dialog.destroy).pack(
+            side=tk.RIGHT, padx=(0, 8)
+        )
+
+        dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
+        self.update_idletasks()
+        width, height = 780, 420
+        x = self.winfo_rootx() + (self.winfo_width() - width) // 2
+        y = self.winfo_rooty() + (self.winfo_height() - height) // 2
+        dialog.geometry(f"{width}x{height}+{max(x, 0)}+{max(y, 0)}")
+        dialog.grab_set()
+        dialog.wait_window()
+        return result["ok"]
+
     def on_choose_torrent(self) -> None:
         """选择种子文件并填入输入框。"""
         selected = filedialog.askopenfilename(
@@ -249,6 +337,12 @@ class CurlDownloaderApp(tk.Tk):
         except ValueError as exc:
             hint = f"\n\n播放列表解析信息：{playlist_error}" if playlist_error else ""
             messagebox.showerror("HAR 解析失败", f"{exc}{hint}")
+            return
+
+        urls = self._collect_urls(parsed_items)
+        self.log(f"HAR 解析完成，共 {len(urls)} 条链接，等待确认")
+        if not self._confirm_urls(urls):
+            self.log("已取消 HAR 下载")
             return
 
         self.input_mode.set("curl")
