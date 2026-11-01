@@ -45,21 +45,52 @@ if (-not (Test-Path (Join-Path $DistDir "CurlDownloader.exe"))) {
 }
 
 # Deploy to the project root: <root>\CurlDownloader.exe
-$ExeTarget = Join-Path $Root "CurlDownloader.exe"
-Copy-Item (Join-Path $DistDir "CurlDownloader.exe") $ExeTarget -Force
+# While the app is running Windows locks the runtime DLLs, and a failed copy used
+# to leave a mix of old and new files ("Failed to import encodings module").
+$running = @(Get-Process -Name "CurlDownloader" -ErrorAction SilentlyContinue)
+if ($running.Count -gt 0) {
+    throw "CurlDownloader.exe is running (PID $($running.Id -join ', ')). Close it and build again."
+}
 
+$ExeTarget = Join-Path $Root "CurlDownloader.exe"
 $InternalSrc = Join-Path $DistDir "_internal"
 $InternalTarget = Join-Path $Root "_internal"
+
+if (Test-Path $ExeTarget) { Remove-Item $ExeTarget -Force -ErrorAction Stop }
+
 if (Test-Path $InternalTarget) {
-    Remove-Item $InternalTarget -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item $InternalTarget -Recurse -Force -ErrorAction Stop
 }
-try {
-    Copy-Item $InternalSrc $InternalTarget -Recurse -Force -ErrorAction Stop
-} catch {
-    Write-Host "Warning: failed to copy _internal. CurlDownloader.exe may still be running."
-    Write-Host "Please close CurlDownloader.exe and run build again."
-    Write-Host "New build output: $DistDir"
-    exit 1
+if (Test-Path $InternalTarget) {
+    throw "Could not remove $InternalTarget. Close anything using it and build again."
+}
+
+Copy-Item (Join-Path $DistDir "CurlDownloader.exe") $ExeTarget -Force -ErrorAction Stop
+Copy-Item $InternalSrc $InternalTarget -Recurse -Force -ErrorAction Stop
+
+# Verify the deployed runtime instead of printing "Done" blindly.
+foreach ($required in @(
+    (Join-Path $InternalTarget "base_library.zip"),
+    (Join-Path $InternalTarget "bin\yt-dlp.exe"),
+    (Join-Path $InternalTarget "bin\ffmpeg.exe"),
+    (Join-Path $InternalTarget "bin\aria2c.exe")
+)) {
+    if (-not (Test-Path $required)) { throw "Deploy check failed: missing $required" }
+}
+if (Test-Path (Join-Path $InternalTarget "_internal")) {
+    throw "Deploy check failed: nested _internal folder under $InternalTarget. Remove it and build again."
+}
+
+$srcCount = (Get-ChildItem $InternalSrc -Recurse -File -Force).Count
+$dstCount = (Get-ChildItem $InternalTarget -Recurse -File -Force).Count
+if ($srcCount -ne $dstCount) {
+    throw "Deploy check failed: copied $dstCount of $srcCount runtime files."
+}
+
+$srcHash = (Get-FileHash (Join-Path $DistDir "CurlDownloader.exe") -Algorithm SHA256).Hash
+$dstHash = (Get-FileHash $ExeTarget -Algorithm SHA256).Hash
+if ($srcHash -ne $dstHash) {
+    throw "Deploy check failed: deployed exe does not match the build output."
 }
 
 Write-Host ""

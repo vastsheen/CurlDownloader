@@ -59,12 +59,18 @@ echo Building exe ...
 python -m PyInstaller --noconfirm --clean --windowed --name CurlDownloader --paths "." --add-data "bin/yt-dlp.exe;bin" --add-data "bin/ffmpeg.exe;bin" --add-data "bin/aria2c.exe;bin" main.py
 if errorlevel 1 goto :build_failed
 
+tasklist /FI "IMAGENAME eq CurlDownloader.exe" 2>nul | find /I "CurlDownloader.exe" >nul
+if not errorlevel 1 goto :still_running
+
 copy /Y "dist\CurlDownloader\CurlDownloader.exe" "CurlDownloader.exe" >nul
 if errorlevel 1 goto :copy_failed
 
 if exist "_internal" rmdir /S /Q "_internal"
 xcopy /E /I /Y "dist\CurlDownloader\_internal" "_internal" >nul
 if errorlevel 1 goto :copy_failed
+
+if not exist "_internal\base_library.zip" goto :copy_failed
+if exist "_internal\_internal" goto :copy_failed
 
 echo.
 echo Done:
@@ -107,6 +113,11 @@ goto :fail
 :build_failed
 echo [ERROR] PyInstaller failed.
 echo         Fix the error printed above, then run build.bat again.
+goto :fail
+
+:still_running
+echo [ERROR] CurlDownloader.exe is running. Close it and run build.bat again.
+echo         Windows locks the runtime files while it is open.
 goto :fail
 
 :copy_failed
