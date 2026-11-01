@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import os
+import sys
 import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
+from . import __version__
 from .bt_downloader import download_with_aria2, find_aria2c, is_magnet, is_torrent_file
 from .curl_parser import build_jd_link, parse_download_inputs
 from .downloader import build_batch_output_names, download_with_ytdlp, find_ffmpeg, find_ytdlp
 from .har_parser import extract_m3u8_requests_from_har, extract_media_requests_from_har, to_curl_text
+from .logging_setup import log_directory, setup_logging
 from .progress_parser import DownloadProgress
 from .progress_ui import ProgressPanel, setup_app_theme
 
@@ -26,6 +30,7 @@ class CurlDownloaderApp(tk.Tk):
 
         setup_app_theme(self)
 
+        self.logger = setup_logging()
         self.output_dir = tk.StringVar(value=str(Path.home() / "Downloads"))
         self.output_name = tk.StringVar(value="video")
         self.resume_enabled = tk.BooleanVar(value=True)
@@ -131,7 +136,12 @@ class CurlDownloaderApp(tk.Tk):
             anchor=tk.W, pady=(0, 8)
         )
 
-        ttk.Label(root, text="日志").pack(anchor=tk.W)
+        log_header = ttk.Frame(root)
+        log_header.pack(fill=tk.X)
+        ttk.Label(log_header, text="日志").pack(side=tk.LEFT)
+        ttk.Button(log_header, text="打开日志目录", style="Ghost.TButton", command=self.on_open_logs).pack(
+            side=tk.RIGHT
+        )
         log_frame = ttk.Frame(root)
         log_frame.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
         self.log_box = tk.Text(
@@ -167,7 +177,10 @@ class CurlDownloaderApp(tk.Tk):
         return entry
 
     def _log_runtime_info(self) -> None:
-        """启动时输出依赖信息。"""
+        """启动时输出依赖信息，并记录日志文件位置。"""
+        self.logger.info("启动 资源下载器 v%s", __version__)
+        self.log(f"日志文件: {log_directory() / 'curldownloader.log'}")
+
         try:
             ytdlp = find_ytdlp()
             self.log(f"yt-dlp: {ytdlp}")
@@ -187,7 +200,9 @@ class CurlDownloaderApp(tk.Tk):
             self.log(f"警告: {exc}")
 
     def log(self, message: str) -> None:
-        """追加日志（线程安全）。"""
+        """追加日志：窗口和 logs 目录下的文件同时记录（线程安全）。"""
+        self.logger.info(message)
+
         def append() -> None:
             self.log_box.configure(state=tk.NORMAL)
             self.log_box.insert(tk.END, message + "\n")
@@ -198,6 +213,16 @@ class CurlDownloaderApp(tk.Tk):
             append()
         else:
             self.after(0, append)
+
+    def on_open_logs(self) -> None:
+        """在资源管理器中打开日志目录。"""
+        directory = log_directory()
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            messagebox.showerror("打开日志失败", f"无法创建日志目录：{directory}\n{exc}")
+            return
+        os.startfile(directory)  # type: ignore[attr-defined]
 
     def _update_progress(self, progress: DownloadProgress) -> None:
         """线程安全更新进度条。"""
@@ -531,9 +556,25 @@ class CurlDownloaderApp(tk.Tk):
 
 
 def main() -> None:
-    """程序入口。"""
+    """程序入口：把未捕获异常也写进日志文件，方便事后排查。"""
+    logger = setup_logging()
+
+    def log_uncaught(exc_type: type[BaseException], exc_value: BaseException, exc_tb: object) -> None:
+        logger.error("未捕获异常", exc_info=(exc_type, exc_value, exc_tb))
+
+    def log_thread_exception(args: threading.ExceptHookArgs) -> None:
+        logger.error(
+            "线程 %s 未捕获异常",
+            getattr(args.thread, "name", "unknown"),
+            exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+        )
+
+    sys.excepthook = log_uncaught
+    threading.excepthook = log_thread_exception
+
     app = CurlDownloaderApp()
     app.mainloop()
+    logger.info("窗口关闭，程序退出")
 
 
 if __name__ == "__main__":

@@ -35,8 +35,10 @@ CurlDownloader/
 │  ├─ downloader.py            # yt-dlp 命令构建、编号、执行
 │  ├─ bt_downloader.py         # aria2c 磁力 / 种子下载
 │  ├─ progress_parser.py       # 进度行解析
-│  └─ progress_ui.py           # 进度面板与主题
+│  ├─ progress_ui.py           # 进度面板与主题
+│  └─ logging_setup.py         # 日志：写入项目下的 logs/ 目录
 ├─ tests/                      # 单元测试（pytest）
+├─ logs/                       # 运行日志（自动生成，已 gitignore）
 ├─ bin/                        # 外部二进制：yt-dlp、ffmpeg、aria2c
 ├─ .gitattributes              # Git LFS 规则（bin/ffmpeg.exe）
 ├─ build.ps1                   # 构建主逻辑（PowerShell）
@@ -231,6 +233,26 @@ python main.py
 ```
 
 需要本地有 Python 3.10+；`bin\` 下的二进制按相对路径查找，缺失时会在日志里给出警告（BT 功能还会直接报错）。
+
+---
+
+## 日志
+
+程序会把窗口里显示的每一行日志同时写进项目目录下：
+
+```
+CurlDownloader\logs\curldownloader.log        # 打包运行：exe 同级目录
+<项目根>\logs\curldownloader.log              # 源码运行：项目根目录
+```
+
+- 格式：`时间 [级别] 线程名 内容`，例如
+  ```
+  2026-11-02 01:38:13,905 [INFO] MainThread 启动 资源下载器 v1.0.0
+  ```
+- 内容：启动信息、三个二进制的实际路径、解析结果、每条 yt-dlp / aria2c 命令、下载与合并过程、错误原因；主线程和下载线程里未捕获的异常也会带堆栈写入。
+- 轮转：单文件 2 MB，最多保留 3 份历史（`curldownloader.log.1` ~ `.3`），不会无限增长。
+- 界面右下角「日志」旁边有 **打开日志目录** 按钮，直接跳到 `logs\`。
+- `logs/` 已加入 `.gitignore`，不会被提交。
 
 ---
 
