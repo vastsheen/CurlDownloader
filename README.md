@@ -215,6 +215,7 @@ Copy-Item "dist\CurlDownloader\_internal" . -Recurse -Force
 | `bin\*.exe` 只有一百多字节 | 克隆时没启用 Git LFS，拿到的是指针文件。执行 `git lfs install` + `git lfs pull` 还原三个二进制，确认大小（68700672 / 18448981 / 5649408）后重新构建。 |
 | `Missing ...\bin\ffmpeg.exe` | `bin\` 里的二进制没跟着仓库下来，按上一节地址下载补齐。 |
 | `'python' 不是内部或外部命令` | Python 没加进 PATH，重装时勾选 *Add Python to PATH*，或用绝对路径调用。 |
+| 双击 exe 报 `Failed to start embedded python interpreter: Failed to import encodings module` | `_internal` 与 exe 不配套或被拷坏，典型原因是构建时旧 exe 还在运行、文件被锁导致复制不完整。删掉 `_internal` 和 `CurlDownloader.exe`，关掉程序后重新构建；`build.ps1` 现在会先检查进程，并校验 `base_library.zip`、bin 三个二进制、文件数量和 exe 哈希。 |
 | 双击 exe 闪退 | 只拷了 exe、没带 `_internal`；或 `_internal` 与 exe 版本不匹配。整包重发。 |
 | 杀毒软件报毒 | PyInstaller 打包的程序常被误判为可疑，加信任即可；也可改用源码运行。 |
 | 想清理中间产物 | 删 `build\`、`dist\`、`__pycache__\` 即可，不影响已构建的 exe。 |
